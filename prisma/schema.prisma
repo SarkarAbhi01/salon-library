@@ -1,0 +1,578 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TenantType {
+  SALON
+  LIBRARY
+}
+
+enum TenantStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  OWNER
+}
+
+enum BillingType {
+  MONTHLY
+  COMMISSION
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+enum SeatStatus {
+  AVAILABLE
+  MAINTENANCE
+}
+
+enum SeatBookingStatus {
+  BOOKED
+  CHECKED_IN
+  COMPLETED
+  EXPIRED
+  CANCELLED
+}
+
+enum MembershipStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum PaymentKind {
+  MEMBERSHIP
+  FINE
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  PARTIALLY_REFUNDED
+  REFUNDED
+}
+
+
+// ───────────── Platform ─────────────
+model Tenant {
+  id           String       @id @default(cuid())
+  type         TenantType
+  name         String
+  phone        String?
+  address      String?
+  status       TenantStatus @default(ACTIVE)
+  enabled      Boolean      @default(true)
+  trialEndsAt  DateTime?
+  chairs       Int          @default(1)   // salon: how many bookings can run in parallel
+  utcOffsetMin Int          @default(330) // tenant local time offset (330 = India)
+  slug         String?      @unique      // public page address, e.g. /my-library or /my-salon (salons and libraries share one namespace)
+  themeEnabled Boolean      @default(false) // library: SuperAdmin switch — when on, the owner sees the Theme menu
+  themeMode    String       @default("FIXED")   // FIXED | MONTHLY | SEASONAL | YEARLY
+  themeName    String       @default("classic") // used when themeMode = FIXED
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  users           User[]
+  services        Service[]
+  hours           BusinessHours[]
+  closures        Closure[]
+  bookings        Booking[]
+  batches         Batch[]
+  memberships     Membership[]
+  auditLogs       AuditLog[]
+  maintenance     MaintenanceSetting[]
+  subscription    TenantSubscription?
+  students        Student[]
+  membershipPlans MembershipPlan[]
+  rooms           Room[]
+  seats           Seat[]
+  seatBookings    SeatBooking[]
+  studySessions   StudySession[]
+  books           Book[]
+  bookIssues      BookIssue[]
+  notifications   Notification[]
+  announcements   Announcement[]
+  payments        Payment[]
+  librarySetting  LibrarySetting?
+  libraryPage     LibraryPage?
+  enquiries       Enquiry[]
+  feedbacks       Feedback[]
+  pushSubs        PushSubscription[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  tenantId     String?
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         UserRole
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  resets       PasswordReset[]
+  auditLogs    AuditLog[]
+  pushSubs     PushSubscription[]
+}
+
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  token     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Plan {
+  id            String   @id @default(cuid())
+  name          String
+  priceCents    Int      @default(0)
+  billing       BillingType
+  commissionPct Float?
+  trialDays     Int      @default(0)
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  subscriptions TenantSubscription[]
+}
+
+model TenantSubscription {
+  id        String    @id @default(cuid())
+  tenantId  String    @unique
+  planId    String
+  startedAt DateTime  @default(now())
+  endsAt    DateTime?
+  status    String    @default("ACTIVE")
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan      Plan      @relation(fields: [planId], references: [id])
+}
+
+model MaintenanceSetting {
+  id        String   @id @default(cuid())
+  tenantId  String?  // null = all tenants
+  enabled   Boolean  @default(false)
+  message   String?
+  createdAt DateTime @default(now())
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  tenantId  String?
+  action    String
+  metadata  Json?
+  createdAt DateTime @default(now())
+  actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+}
+
+// ───────────── Salon ─────────────
+model Service {
+  id                   String  @id @default(cuid())
+  tenantId             String
+  name                 String
+  durationMin          Int
+  basePriceCents       Int
+  flexiblePriceMinCents Int?
+  active               Boolean @default(true)
+  tenant               Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bookings             Booking[]
+}
+
+model BusinessHours {
+  id           String  @id @default(cuid())
+  tenantId     String
+  dayOfWeek    Int
+  open         Boolean @default(false)
+  morningStart String?
+  morningEnd   String?
+  noonStart    String?
+  noonEnd      String?
+  eveningStart String?
+  eveningEnd   String?
+  tenant       Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, dayOfWeek])
+}
+
+model Closure {
+  id       String   @id @default(cuid())
+  tenantId String
+  from     DateTime
+  to       DateTime
+  message  String?
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, from])
+}
+
+model Booking {
+  id               String        @id @default(cuid())
+  code             String?       @unique // customer-facing booking / tracking ID, e.g. SB-7K3M9Q
+  tenantId         String
+  serviceId        String
+  customerName     String
+  customerPhone    String?
+  startAt          DateTime
+  endAt            DateTime
+  agreedPriceCents Int
+  status           BookingStatus @default(PENDING)
+  source           String        @default("OWNER") // OWNER | PUBLIC
+  notes            String?
+  createdAt        DateTime      @default(now())
+  tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  service          Service       @relation(fields: [serviceId], references: [id])
+  pushSubs         PushSubscription[]
+
+  @@index([tenantId, startAt])
+  @@index([tenantId, status])
+}
+
+// ───────────── Library: batches & memberships ─────────────
+model Batch {
+  id          String  @id @default(cuid())
+  tenantId    String
+  name        String
+  dayOfWeek   Int
+  startTime   String
+  endTime     String
+  capacity    Int
+  active      Boolean @default(true)
+  tenant      Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  memberships Membership[]
+
+  @@index([tenantId, dayOfWeek])
+}
+
+model MembershipPlan {
+  id          String  @id @default(cuid())
+  tenantId    String
+  name        String
+  months      Int
+  priceCents  Int
+  description String?
+  active      Boolean @default(true)
+  tenant      Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  memberships Membership[]
+}
+
+model Membership {
+  id           String           @id @default(cuid())
+  tenantId     String
+  studentId    String?
+  planId       String?
+  batchId      String?
+  studentName  String
+  studentPhone String?
+  months       Int
+  feeCents     Int
+  startDate    DateTime
+  endDate      DateTime
+  status       MembershipStatus @default(ACTIVE)
+  cancelledAt  DateTime?
+  refundCents  Int              @default(0)
+  createdAt    DateTime         @default(now())
+  tenant       Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  student      Student?         @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  plan         MembershipPlan?  @relation(fields: [planId], references: [id], onDelete: SetNull)
+  batch        Batch?           @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  payments     Payment[]
+
+  @@index([tenantId, status])
+  @@index([studentId])
+  @@index([batchId, status])
+}
+
+// ───────────── Library: students ─────────────
+model Student {
+  id            String   @id @default(cuid())
+  tenantId      String
+  name          String
+  email         String?
+  phone         String?
+  passwordHash  String
+  cardNo        String
+  status        String   @default("ACTIVE") // ACTIVE | BLOCKED
+  address       String?
+  examGoal      String?
+  dailyGoalMin  Int      @default(240)
+  weeklyGoalMin Int      @default(1680)
+  createdAt     DateTime @default(now())
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  memberships   Membership[]
+  seatBookings  SeatBooking[]
+  sessions      StudySession[]
+  issues        BookIssue[]
+  notifications Notification[]
+  payments      Payment[]
+  pushSubs      PushSubscription[]
+
+  @@unique([tenantId, email])
+  @@unique([tenantId, cardNo])
+  @@index([tenantId, name])
+}
+
+// ───────────── Library: seats ─────────────
+model Room {
+  id       String @id @default(cuid())
+  tenantId String
+  name     String
+  floor    Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  seats    Seat[]
+
+  @@unique([tenantId, name])
+}
+
+model Seat {
+  id       String     @id @default(cuid())
+  tenantId String
+  roomId   String
+  label    String
+  row      Int        @default(0)
+  col      Int        @default(0)
+  status   SeatStatus @default(AVAILABLE)
+  tenant   Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  room     Room       @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  bookings SeatBooking[]
+
+  @@unique([roomId, label])
+}
+
+model SeatBooking {
+  id             String            @id @default(cuid())
+  code           String?           @unique // booking / tracking ID, e.g. LB-4H8N2P
+  tenantId       String
+  seatId         String
+  studentId      String
+  startAt        DateTime
+  endAt          DateTime
+  status         SeatBookingStatus @default(BOOKED)
+  checkInAt      DateTime?
+  checkOutAt     DateTime?
+  reminderSent   Boolean           @default(false)
+  expiryNotified Boolean           @default(false)
+  createdAt      DateTime          @default(now())
+  tenant         Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  seat           Seat              @relation(fields: [seatId], references: [id], onDelete: Cascade)
+  student        Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  sessions       StudySession[]
+
+  @@index([tenantId, startAt])
+  @@index([seatId, startAt])
+  @@index([studentId, startAt])
+}
+
+// ───────────── Library: study sessions ─────────────
+model StudySession {
+  id            String       @id @default(cuid())
+  tenantId      String
+  studentId     String
+  seatBookingId String?
+  subject       String?
+  startedAt     DateTime     @default(now())
+  endedAt       DateTime?
+  breakSeconds  Int          @default(0)
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  student       Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  seatBooking   SeatBooking? @relation(fields: [seatBookingId], references: [id], onDelete: SetNull)
+  breaks        StudyBreak[]
+
+  @@index([studentId, startedAt])
+  @@index([tenantId, endedAt])
+}
+
+model StudyBreak {
+  id        String       @id @default(cuid())
+  sessionId String
+  startedAt DateTime     @default(now())
+  endedAt   DateTime?
+  session   StudySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
+
+// ───────────── Library: books ─────────────
+model Book {
+  id        String  @id @default(cuid())
+  tenantId  String
+  title     String
+  author    String
+  isbn      String?
+  category  String?
+  shelf     String?
+  copies    Int     @default(1)
+  available Int     @default(1)
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  issues    BookIssue[]
+
+  @@index([tenantId, title])
+}
+
+model BookIssue {
+  id              String    @id @default(cuid())
+  tenantId        String
+  bookId          String
+  studentId       String
+  issuedAt        DateTime  @default(now())
+  dueAt           DateTime
+  returnedAt      DateTime?
+  fineCents       Int       @default(0)
+  finePaid        Boolean   @default(false)
+  dueReminderSent Boolean   @default(false)
+  overdueNotified Boolean   @default(false)
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  book            Book      @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  student         Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  payments        Payment[]
+
+  @@index([tenantId, returnedAt])
+  @@index([studentId, returnedAt])
+}
+
+model LibrarySetting {
+  id                     String @id @default(cuid())
+  tenantId               String @unique
+  finePerDayCents        Int    @default(1000)
+  loanDays               Int    @default(14)
+  maxBooksPerStudent     Int    @default(3)
+  bookingGraceMin        Int    @default(15)  // minutes after start before an un-checked-in booking expires
+  maxBookingHours        Int    @default(8)
+  bookingCancelMinBefore Int    @default(30)  // students cannot cancel closer than this to start
+  refundFullHours        Int    @default(24)  // 100% refund if cancelled within this many hours of purchase
+  refundProratePct       Int    @default(50)  // after that: % of unused-time value refunded
+  tenant                 Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+// ───────────── Notifications, announcements, payments ─────────────
+model Notification {
+  id        String    @id @default(cuid())
+  tenantId  String
+  studentId String
+  type      String
+  title     String
+  body      String
+  readAt    DateTime?
+  pushedAt  DateTime? // set once the browser push for this notification has been attempted
+  createdAt DateTime  @default(now())
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, createdAt])
+  @@index([pushedAt, createdAt])
+}
+
+model Announcement {
+  id        String   @id @default(cuid())
+  tenantId  String
+  title     String
+  body      String
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+}
+
+model Payment {
+  id            String        @id @default(cuid())
+  tenantId      String
+  studentId     String?
+  membershipId  String?
+  issueId       String?
+  kind          PaymentKind
+  amountCents   Int
+  refundedCents Int           @default(0)
+  method        String        @default("ONLINE") // ONLINE | CASH | UPI
+  status        PaymentStatus @default(PENDING)
+  gatewayRef    String?
+  invoiceNo     String?
+  meta          Json?
+  refundReason  String?
+  paidAt        DateTime?
+  createdAt     DateTime      @default(now())
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  student       Student?      @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  membership    Membership?   @relation(fields: [membershipId], references: [id], onDelete: SetNull)
+  issue         BookIssue?    @relation(fields: [issueId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, invoiceNo])
+  @@index([tenantId, createdAt])
+  @@index([studentId, createdAt])
+}
+
+// ───────────── Public library website ─────────────
+model LibraryPage {
+  id        String   @id @default(cuid())
+  tenantId  String   @unique
+  published Boolean  @default(true)
+  content   Json
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model Enquiry {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  mobile    String
+  email     String?
+  person    String   @default("Student")
+  message   String
+  status    String   @default("NEW") // NEW | CONTACTED | CLOSED
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+}
+
+model Feedback {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  rating    Int
+  message   String
+  approved  Boolean  @default(false) // only approved feedback is shown publicly
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+}
+
+// ───────────── Browser push notifications (opt-in) ─────────────
+// One row per browser that said "yes". Exactly one of bookingId / studentId / userId is set:
+//   bookingId → a salon customer following one booking · studentId → library student · userId → salon owner (new booking alerts)
+model PushSubscription {
+  id        String   @id @default(cuid())
+  tenantId  String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  bookingId String?
+  studentId String?
+  userId    String?
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  booking   Booking? @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  student   Student? @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+  @@index([studentId])
+  @@index([userId])
+}
