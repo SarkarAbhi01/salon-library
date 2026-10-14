@@ -12,13 +12,29 @@ if (!process.env.DATABASE_URL) {
   console.error('FATAL: DATABASE_URL must be set in .env.');
   process.exit(1);
 }
+
+const isProduction = process.env.NODE_ENV === "production";
+
 export const env = {
+  isProduction,
+
   jwtSecret: process.env.JWT_SECRET,
+
   port: Number(process.env.PORT || 4000),
-  webOrigins: (process.env.WEB_ORIGIN || 'http://localhost:5173').split(',').map(s => s.trim()),
-  // "mock" lets the dev UI complete a fake online payment. Set PAYMENT_PROVIDER=razorpay/stripe etc. and implement a webhook for production.
-  paymentProvider: process.env.PAYMENT_PROVIDER || 'mock',
+
+  webOrigins: (
+    process.env.WEB_ORIGIN ||
+    (isProduction
+      ? ""
+      : "http://localhost:5173")
+  )
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+
+  paymentProvider: process.env.PAYMENT_PROVIDER || "mock",
 };
+
 
 // Browser push (optional). Generate keys once with:  npx web-push generate-vapid-keys
 // Without them the app works normally and the "notify me" buttons are simply hidden.

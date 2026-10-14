@@ -6,3 +6,7 @@ dist
 .vite
 storage
 *.log
+
+.vercel
+.env*
+.env.local
