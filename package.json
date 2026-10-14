@@ -5,13 +5,15 @@
     "apps/api",
     "apps/web"
   ],
-  "scripts": {
-    "dev": "concurrently \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:seed": "tsx prisma/seed.ts",
-    "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web"
-  },
+  
+"scripts": {
+  "dev": "concurrently \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
+  "db:generate": "prisma generate --schema=prisma/schema.prisma",
+  "db:migrate": "prisma migrate dev --schema=prisma/schema.prisma",
+  "db:migrate:deploy": "prisma migrate deploy --schema=prisma/schema.prisma",
+  "db:seed": "tsx prisma/seed.ts",
+  "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web"
+},
   "devDependencies": {
     "concurrently": "^9.2.1",
     "prisma": "6.19.3",
